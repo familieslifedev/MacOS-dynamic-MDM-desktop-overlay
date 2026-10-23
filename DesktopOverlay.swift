@@ -109,10 +109,8 @@ private enum Solar {
         var sunset: Date?
         var previous = start
         var previousValue = elevation(at: previous, latitude: latitude, longitude: longitude) + 0.833
-        let end = Calendar.current.date(byAdding: .day, value: 1, to: start)!
-        let interval = end.timeIntervalSince(start) / 96
-        for step in 1...96 { // local calendar day, including DST transitions
-            let next = start.addingTimeInterval(Double(step) * interval)
+        for step in 1...72 { // 27 hours at 22.5-minute intervals
+            let next = start.addingTimeInterval(Double(step) * 1350)
             let value = elevation(at: next, latitude: latitude, longitude: longitude) + 0.833
             if (previousValue <= 0 && value > 0) || (previousValue >= 0 && value < 0) {
                 var low = previous
@@ -133,24 +131,74 @@ private enum Solar {
         return (rise, set)
     }
 
-    // Eight ordered images: dawn, morning, late morning, midday, afternoon,
-    // sunset, dusk, night. These are *assumed* ordering, not HEIC metadata.
-    static func frame(at date: Date, latitude: Double, longitude: Double) -> Int {
-        guard let (sunrise, sunset) = sunEvents(around: date, latitude: latitude, longitude: longitude) else {
-            return elevation(at: date, latitude: latitude, longitude: longitude) > 0 ? 4 : 8
-        }
-        let dawn = sunrise.addingTimeInterval(-45 * 60)
-        let dusk = sunset.addingTimeInterval(45 * 60)
-        if date < dawn || date >= dusk { return 8 }
-        if date < sunrise { return 1 }
-        if date >= sunset { return 7 }
-        let fraction = date.timeIntervalSince(sunrise) / sunset.timeIntervalSince(sunrise)
-        if fraction < 0.18 { return 2 }
-        if fraction < 0.38 { return 3 }
-        if fraction < 0.62 { return 4 }
-        if fraction < 0.82 { return 5 }
-        return 6
+    // Metadata-derived solar anchor points. Frame indices are 1-based, matching
+    // ImageIO exports of the original Apple HEIC frames (01.jpg, 02.jpg, ...).
+    // This is a nearest-anchor approximation, not Apple's proprietary interpolation.
+    private struct Anchor {
+        let altitude: Double
+        let frame: Int
     }
+
+    private static let landscapeMorning = [
+        Anchor(altitude: -25, frame: 2), Anchor(altitude: -9, frame: 3),
+        Anchor(altitude: 0, frame: 4), Anchor(altitude: 10, frame: 1),
+        Anchor(altitude: 25, frame: 5)
+    ]
+    private static let landscapeEvening = [
+        Anchor(altitude: -25, frame: 2), Anchor(altitude: -9, frame: 8),
+        Anchor(altitude: 0, frame: 7), Anchor(altitude: 10, frame: 6),
+        Anchor(altitude: 25, frame: 5)
+    ]
+    private static let gradientMorning = [
+        Anchor(altitude: -87.6146, frame: 1), Anchor(altitude: -17.1078, frame: 2),
+        Anchor(altitude: -11.1067, frame: 3), Anchor(altitude: -5.3556, frame: 4),
+        Anchor(altitude: 0.1877, frame: 5), Anchor(altitude: 6.0427, frame: 6),
+        Anchor(altitude: 11.9786, frame: 7), Anchor(altitude: 18.4530, frame: 8),
+        Anchor(altitude: 88.4186, frame: 9)
+    ]
+    private static let gradientEvening = [
+        Anchor(altitude: -87.6146, frame: 1), Anchor(altitude: -17.6982, frame: 16),
+        Anchor(altitude: -11.1970, frame: 15), Anchor(altitude: -5.4458, frame: 14),
+        Anchor(altitude: 0.7510, frame: 13), Anchor(altitude: 6.4451, frame: 12),
+        Anchor(altitude: 12.1375, frame: 11), Anchor(altitude: 18.3632, frame: 10),
+        Anchor(altitude: 88.4186, frame: 9)
+    ]
+
+    // The azimuth is clockwise from true north (east=90, south=180, west=270).
+    static func position(at date: Date, latitude: Double, longitude: Double) -> (altitude: Double, azimuth: Double) {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        let day = Double(cal.ordinality(of: .day, in: .year, for: date) ?? 1)
+        let parts = cal.dateComponents([.hour, .minute, .second], from: date)
+        let minutes = Double(parts.hour ?? 0) * 60 + Double(parts.minute ?? 0) + Double(parts.second ?? 0) / 60
+        let gamma = 2 * Double.pi / 365 * (day - 1 + (minutes / 60 - 12) / 24)
+        let eqTime = 229.18 * (0.000075 + 0.001868 * cos(gamma) - 0.032077 * sin(gamma)
+                               - 0.014615 * cos(2 * gamma) - 0.040849 * sin(2 * gamma))
+        let decl = 0.006918 - 0.399912 * cos(gamma) + 0.070257 * sin(gamma)
+                   - 0.006758 * cos(2 * gamma) + 0.000907 * sin(2 * gamma)
+                   - 0.002697 * cos(3 * gamma) + 0.00148 * sin(3 * gamma)
+        let trueSolarMinutes = (minutes + eqTime + 4 * longitude).truncatingRemainder(dividingBy: 1440)
+        let hourAngle = (trueSolarMinutes / 4 - 180) * Double.pi / 180
+        let lat = latitude * Double.pi / 180
+        let sine = sin(lat) * sin(decl) + cos(lat) * cos(decl) * cos(hourAngle)
+        let altitude = asin(max(-1, min(1, sine))) * 180 / Double.pi
+        let azimuth = (atan2(sin(hourAngle), cos(hourAngle) * sin(lat) - tan(decl) * cos(lat))
+                       * 180 / Double.pi + 180 + 360).truncatingRemainder(dividingBy: 360)
+        return (altitude, azimuth)
+    }
+
+    static func frame(at date: Date, latitude: Double, longitude: Double, wallpaperSet: String) -> Int {
+        let sun = position(at: date, latitude: latitude, longitude: longitude)
+        let morning = sun.azimuth < 180
+        let anchors: [Anchor]
+        if wallpaperSet.caseInsensitiveCompare("Solar Gradients") == .orderedSame {
+            anchors = morning ? gradientMorning : gradientEvening
+        } else {
+            anchors = morning ? landscapeMorning : landscapeEvening
+        }
+        return anchors.min(by: { abs($0.altitude - sun.altitude) < abs($1.altitude - sun.altitude) })?.frame ?? 1
+    }
+
 }
 
 private final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -232,11 +280,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func readConfiguration() -> OverlayConfig {
-        let url = baseDirectory.appendingPathComponent("overlay.json")
+        let url = baseDirectory.appendingPathComponent("wallpaper-config.json")
         guard let data = try? Data(contentsOf: url) else { return OverlayConfig() }
         do { return try JSONDecoder().decode(OverlayConfig.self, from: data) }
         catch {
-            logger.error("Invalid overlay.json: \(error.localizedDescription, privacy: .public)")
+            logger.error("Invalid wallpaper-config.json: \(error.localizedDescription, privacy: .public)")
             return configuration // Preserve last valid settings
         }
     }
@@ -253,16 +301,16 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 logger.error("Solar mode requires valid latitude/longitude and a safe wallpaperSet name")
                 return nil
             }
-            let folder = baseDirectory.appendingPathComponent("dynamic", isDirectory: true)
+            let folder = baseDirectory.appendingPathComponent("Apple Dynamic Wallpapers", isDirectory: true)
                 .appendingPathComponent(config.wallpaperSet, isDirectory: true)
             if watchedSetPath != folder.path {
                 setWatcher?.cancel()
                 setWatcher = watchDirectory(folder.path)
                 watchedSetPath = folder.path
             }
-            let frame = Solar.frame(at: Date(), latitude: lat, longitude: lon)
+            let frame = Solar.frame(at: Date(), latitude: lat, longitude: lon, wallpaperSet: config.wallpaperSet)
             for ext in extensions {
-                let url = folder.appendingPathComponent(String(format: "%02d.%@", frame, ext))
+                let url = folder.appendingPathComponent(String(format: "%@ - %02d.%@", folder.lastPathComponent, frame, ext))
                 if fm.fileExists(atPath: url.path) { return url }
             }
             logger.error("Missing solar frame \(frame) in \(folder.path, privacy: .public)")
@@ -377,11 +425,11 @@ if !CommandLine.arguments.contains("--background") {
     exit(0)
 }
 
-let lock: SingleInstanceLock
+private let lock: SingleInstanceLock
 do { lock = try SingleInstanceLock() }
 catch { logger.notice("DesktopOverlay already running or unable to lock: \(error.localizedDescription, privacy: .public)"); exit(0) }
 let app = NSApplication.shared
-let delegate = AppDelegate(instanceLock: lock)
+private let delegate = AppDelegate(instanceLock: lock)
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
 app.run()

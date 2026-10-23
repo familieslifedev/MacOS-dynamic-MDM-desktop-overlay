@@ -7,3 +7,9 @@ DesktopOverlay
 .DS_Store
 *.dSYM/
 wallpaper-config.json
+
+# Apple dynamic wallpaper assets
+/Apple Dynamic Wallpapers/
+
+# Local compiled executable
+/DesktopOverlayDynamic
