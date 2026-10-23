@@ -55,9 +55,8 @@ Run `./DesktopOverlayLauncher`. To inspect runtime messages:
 log stream --style compact --predicate 'subsystem == "io.github.iamrobertorodriguez.DesktopOverlay"'
 ```
 
-## Limitations and safety
+## Limitations
 
 - No per-monitor wallpaper selection.
 - Fade behaviour and solar transitions require real-world testing on macOS.
-- Does not modify device management profiles or system wallpaper preferences; it overlays the desktop visually. Use on a managed device only with employer approval.
-- Do not remove remote-support or management agents from a company computer without IT authorisation. If ScreenConnect was removed without approval, inform IT so they can restore required support access.
+- Does not modify device management profiles or system wallpaper preferences; it overlays the desktop visually.
