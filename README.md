@@ -1,89 +1,63 @@
-# DesktopOverlay
+# DesktopOverlay — Solar Dynamic fork additions
 
-A tool for setting a custom wallpaper on macOS devices where the desktop background is locked down by a corporate MDM profile.
+This folder is a **fork-ready set of changes** for [iamrobertorodriguez/MacOS-MDM-desktop-overlay](https://github.com/iamrobertorodriguez/MacOS-MDM-desktop-overlay). It is **not a GitHub fork by itself**: to preserve the original project's commit history and fork relationship, use GitHub's **Fork** button first, then copy these files into your fork. Credit and link to the original author should be retained. Review the upstream repository's licence before redistributing.
 
-The MDM profile blocks the native wallpaper mechanism (`com.apple.desktop`), but it does not prevent user-level applications from creating windows at the desktop layer. DesktopOverlay places a borderless, click-through window above the system wallpaper but beneath every other application. The visual result is indistinguishable from a real desktop background.
+## Features
 
-## Requirements
+- Original static `wallpaper.jpg` (or png/heic/etc.) mode if no `overlay.json` is present or `mode` is `static`.
+- Solar-based eight-image selection using a configured latitude/longitude, without location services or network requests.
+- Smooth configurable crossfade (default 1.5 seconds).
+- Desktop-level, click-through overlay on each connected monitor; all monitors show the same image.
+- Monitors for active image and directory changes, checks every 60 seconds, and keeps last good image if a file is missing or invalid.
+- Background launch and single-instance lock retained.
 
-- MacOS Sonoma 14 or higher.
-- A wallpaper image placed at the root of this project directory.
-- No administrator privileges are required.
+## Create the fork on GitHub
 
----
+1. Open the [upstream repository](https://github.com/iamrobertorodriguez/MacOS-MDM-desktop-overlay) and click **Fork**. Name it however you like (for example, `MacOS-MDM-desktop-overlay-dynamic`).
+2. Clone **your** fork locally: `git clone https://github.com/YOUR-USERNAME/MacOS-MDM-desktop-overlay.git`.
+3. Copy the contents of this ZIP **into the cloned folder**, replacing its `DesktopOverlay.swift` and `README.md` (you may prefer to merge the README instead to retain the original usage instructions). Keep the upstream `.github/` directory and any other files intact.
+4. Review with `git diff`, then `git add DesktopOverlay.swift README.md overlay.example.json .gitignore` and `git commit -m "Add solar dynamic wallpaper support and crossfades"`.
+5. `git push origin main` (or your fork's branch name). Your repository will be marked as a fork of the original.
 
-## Setup
+**Alternative:** In the original repo, create a new branch on your fork and commit these changes. Do not publish extracted Apple wallpaper images or work/private data without appropriate rights and permission.
 
-### Step 1 — Place your wallpaper image
+## Build (macOS 14+)
 
-Add an image file named **`wallpaper`** to the root of this project directory (the same folder that contains `DesktopOverlay.swift`).
-
-The file must be named exactly `wallpaper` (lowercase) with any of the following extensions:
-
-`.jpg` · `.jpeg` · `.png` · `.heic` · `.tiff` · `.bmp` · `.gif` · `.webp`
-
-For example:
-
-```
-wallpaper.jpg
-wallpaper.png
-wallpaper.heic
+```sh
+swiftc -O -framework AppKit -framework QuartzCore DesktopOverlay.swift -o DesktopOverlayLauncher
 ```
 
-> **Tip:** For the best visual result, use an image whose resolution matches or exceeds your largest display. Each monitor scales and centers the image independently while preserving its aspect ratio. If a monitor has a different aspect ratio, the image edges are cropped evenly to fill the screen without stretching or black bars.
+On your Mac, test from Terminal after stopping the original launcher; the original and dynamic editions use the same per-user lock. The source was prepared on Linux and **has not been compiled or runtime-tested on macOS**.
 
-Only one `wallpaper.*` file should be present at a time. If multiple formats exist, the first match found in the order listed above will be used.
+## Configuration
 
-### Step 2 — Build the binary
+Copy `overlay.example.json` to `overlay.json`. Set `latitude` and `longitude` for the intended approximate location, `mode` to `solar`, and `wallpaperSet` to a directory name under `dynamic/`. Do not commit `overlay.json` if it contains location information.
 
-Open **Terminal**, navigate to the project directory, and compile the Swift source into an executable by running:
-
-```bash
-swiftc DesktopOverlay.swift -o DesktopOverlayLauncher -framework AppKit
+```text
+project/
+  DesktopOverlay.swift
+  overlay.example.json
+  overlay.json                   # local-only config (ignored by Git)
+  wallpaper.jpg                  # optional static fallback
+  dynamic/
+    The Desert/
+      01.jpg
+      02.jpg
+      ...
+      08.jpg
 ```
 
-This produces a standalone binary called `DesktopOverlayLauncher` in the same directory.
+The app assumes files `01` to `08` are ordered dawn, morning, late morning, midday, afternoon, sunset, dusk, night. **Apple's HEIC order has not been verified**, so inspect/reorder the extracted stills. This is an approximate solar schedule, not Apple's original dynamic-wallpaper metadata engine. For static mode, set `mode` to `static` and use `wallpaper.jpg` next to the binary.
 
-### Step 3 — Launch the binary
+Run `./DesktopOverlayLauncher`. To inspect runtime messages:
 
-(Option 1 - Terminal): You can now launch the overlay by running:
-
-```bash
-./DesktopOverlayLauncher
-```
-
-(Option 2 - UI): Or you can also launch the overlay by double-clicking the binary result using the Finder.
-
-Whichever option you use, the process automatically moves itself to the background—the Terminal window is released immediately and can be closed. The overlay remains active, invisible in both the Dock and the app switcher, until you log out or manually stop it. Launching the binary again while it is already running exits cleanly instead of creating duplicate overlays. If no usable wallpaper exists at startup, the process stays active and displays one as soon as a supported `wallpaper.*` file becomes available.
-
-To stop it manually, find its process ID and terminate it:
-
-```bash
-ps aux | grep '[D]esktopOverlayLauncher'
-kill <PID>
-```
-
-Replace `<PID>` with the number shown in the second column of the output.
-
-> **Note:** The overlay watches both the project directory and the active wallpaper file. Replacing, renaming, or overwriting the image in place triggers a refresh after file activity settles—no restart needed. Unrelated directory changes are ignored. If a replacement is incomplete or invalid, the existing wallpaper stays visible while the process waits for another change. If you switch to a different image format (e.g., from `.jpg` to `.png`), make sure to delete the old file first so only one `wallpaper.*` file exists.
-
-### Runtime logs
-
-DesktopOverlay writes lifecycle and error messages to the macOS unified log, including failures that occur after the process detaches from Terminal. Stream its messages with:
-
-```bash
+```sh
 log stream --style compact --predicate 'subsystem == "io.github.iamrobertorodriguez.DesktopOverlay"'
 ```
 
-### Step 4 — Start automatically at login *(optional)*
+## Limitations and safety
 
-If you want the overlay to launch every time you log in without having to run it manually, you can add the binary to your **Login Items**:
-
-1. Open **System Settings** (or **System Preferences** on older macOS versions).
-2. Navigate to **General → Login Items**.
-3. Under the **Open at Login** section, click the **+** button.
-4. In the file picker that appears, navigate to the project directory, select the **`DesktopOverlayLauncher`** binary, and click **Open**.
-
-The binary will now run automatically every time you start your Mac or log in to your user account. Since it runs as a background process with no Dock icon or visible window, you will not notice it — your custom wallpaper will simply appear on the desktop.
-
-To remove it from Login Items later, go back to **System Settings → General → Login Items**, find `DesktopOverlayLauncher` in the list, and click the **−** button to remove it.
+- No per-monitor wallpaper selection.
+- Fade behaviour and solar transitions require real-world testing on macOS.
+- Does not modify device management profiles or system wallpaper preferences; it overlays the desktop visually. Use on a managed device only with employer approval.
+- Do not remove remote-support or management agents from a company computer without IT authorisation. If ScreenConnect was removed without approval, inform IT so they can restore required support access.

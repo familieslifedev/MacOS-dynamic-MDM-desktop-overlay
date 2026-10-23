@@ -1,11 +1,8 @@
-# macOS metadata
-.DS_Store
-
-# Binary result
+# Local configuration and personal wallpapers
+overlay.json
+wallpaper.*
+dynamic/
 DesktopOverlayLauncher
-
-# Log file
-overlay.log
-
-# Custom wallpaper
-wallpaper*
+DesktopOverlay
+.DS_Store
+*.dSYM/
