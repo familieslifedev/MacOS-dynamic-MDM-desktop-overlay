@@ -13,3 +13,6 @@ wallpaper-config.json
 
 # Local compiled executable
 /DesktopOverlayDynamic
+
+# Dynamic Desktop Manager build output
+/DynamicDesktopManager.app/
