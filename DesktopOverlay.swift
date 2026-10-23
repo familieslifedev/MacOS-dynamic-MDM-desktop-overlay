@@ -13,9 +13,10 @@ private struct OverlayConfig: Decodable, Equatable {
     var longitude: Double? = nil            // Decimal degrees, east positive
     var wallpaperSet: String = "The Desert" // Folder under dynamic/
     var crossfadeSeconds: Double = 1.5
+    var testDateTime: String? = nil  // Optional ISO 8601 UTC test clock; omit for live sun
 
     enum CodingKeys: String, CodingKey {
-        case mode, latitude, longitude, wallpaperSet, crossfadeSeconds
+        case mode, latitude, longitude, wallpaperSet, crossfadeSeconds, testDateTime
     }
 
     init() {}
@@ -26,6 +27,7 @@ private struct OverlayConfig: Decodable, Equatable {
         longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)
         wallpaperSet = try c.decodeIfPresent(String.self, forKey: .wallpaperSet) ?? "The Desert"
         crossfadeSeconds = try c.decodeIfPresent(Double.self, forKey: .crossfadeSeconds) ?? 1.5
+        testDateTime = try c.decodeIfPresent(String.self, forKey: .testDateTime)
     }
 }
 
@@ -231,7 +233,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
         refresh()
         // Poll once per minute: also detects clock/time-zone changes and missed FS events.
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             self?.refresh()
         }
     }
@@ -308,7 +310,26 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 setWatcher = watchDirectory(folder.path)
                 watchedSetPath = folder.path
             }
-            let frame = Solar.frame(at: Date(), latitude: lat, longitude: lon, wallpaperSet: config.wallpaperSet)
+            // Developer-only simulated clock. A malformed value is rejected rather
+            // than silently showing live time and producing misleading test results.
+            let solarDate: Date
+            if let override = config.testDateTime {
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                let parsed = formatter.date(from: override)
+                    ?? ISO8601DateFormatter().date(from: override)
+                guard let parsed else {
+                    logger.error("Invalid testDateTime; use ISO 8601, e.g. 2026-06-21T06:00:00Z")
+                    return nil
+                }
+                solarDate = parsed
+            } else {
+                solarDate = Date()
+            }
+            let frame = Solar.frame(at: solarDate, latitude: lat, longitude: lon, wallpaperSet: config.wallpaperSet)
+            if config.testDateTime != nil {
+                logger.notice("Solar test clock active; selected frame \(frame)")
+            }
             for ext in extensions {
                 let url = folder.appendingPathComponent(String(format: "%@ - %02d.%@", folder.lastPathComponent, frame, ext))
                 if fm.fileExists(atPath: url.path) { return url }
@@ -383,6 +404,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             let old = activeViews[ObjectIdentifier(window)]
             content.subviews.filter { $0 !== old }.forEach { $0.removeFromSuperview() }
             let newView = AspectFillImageView(frame: content.bounds, image: image)
+            newView.wantsLayer = true
             newView.autoresizingMask = [.width, .height]
             newView.alphaValue = old == nil || fadeSeconds == 0 ? 1 : 0
             content.addSubview(newView)
