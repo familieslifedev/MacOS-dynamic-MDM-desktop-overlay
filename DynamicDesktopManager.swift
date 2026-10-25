@@ -10,6 +10,8 @@ final class Manager: ObservableObject {
     @Published var status = "Checking…"
     @Published var detail = ""
     @Published var busy = false
+    @Published var testMode = false
+    @Published var customDate = Date()
 
     // Bundle lives at <repository>/DynamicDesktopManager.app/Contents/MacOS/...
     private var repo: URL {
@@ -28,6 +30,16 @@ final class Manager: ObservableObject {
         if let data = try? Data(contentsOf: config),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let name = json["wallpaperSet"] as? String { selectedSet = name }
+        if let data = try? Data(contentsOf: config),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let value = json["testDateTime"] as? String,
+               let date = Self.isoFormatter.date(from: value) {
+                testMode = true
+                customDate = date
+            } else {
+                testMode = false
+            }
+        }
         status = runningPIDs().isEmpty ? "Stopped" : "Running"
     }
 
@@ -45,6 +57,45 @@ final class Manager: ObservableObject {
             detail = "Selected \(name). The overlay will refresh automatically."
         } catch { detail = "Configuration error: \(error.localizedDescription)" }
     }
+
+    private static var isoFormatter: ISO8601DateFormatter {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return formatter
+    }
+
+    private func updateTestDate(_ date: Date?) {
+        do {
+            let data = try Data(contentsOf: config)
+            guard var json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw NSError(domain: "Manager", code: 3, userInfo: [NSLocalizedDescriptionKey: "Configuration must be a JSON object"])
+            }
+            if let date {
+                json["testDateTime"] = Self.isoFormatter.string(from: date)
+            } else {
+                json.removeValue(forKey: "testDateTime")
+            }
+            let updated = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
+            try updated.write(to: config, options: .atomic)
+            testMode = date != nil
+            if let date { customDate = date }
+            detail = date == nil ? "Live solar time restored." : "Simulated time saved. Overlay will refresh automatically."
+        } catch {
+            detail = "Solar test configuration error: \(error.localizedDescription)"
+        }
+    }
+
+    func simulate(hour: Int, month: Int = 6, day: Int = 21) {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let components = DateComponents(year: 2026, month: month, day: day, hour: hour, minute: 0)
+        guard let date = calendar.date(from: components) else { return }
+        updateTestDate(date)
+    }
+
+    func applyCustomDate() { updateTestDate(customDate) }
+    func returnToLive() { updateTestDate(nil) }
 
     private func runningPIDs() -> [pid_t] {
         let target = executable.resolvingSymlinksInPath().path
@@ -164,6 +215,31 @@ struct ManagerView: View {
                 ForEach(manager.sets, id: \.self) { Text($0).tag($0) }
             }
             .disabled(manager.sets.isEmpty || manager.busy)
+            Divider()
+            HStack {
+                Text("Solar Testing").font(.headline)
+                Spacer()
+                if manager.testMode {
+                    Text("TEST MODE").font(.caption2).bold().foregroundStyle(.orange)
+                } else {
+                    Text("Live solar").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            HStack {
+                Button("Midday") { manager.simulate(hour: 12) }
+                Button("Sunset") { manager.simulate(hour: 20) }
+                Button("Night") { manager.simulate(hour: 23, month: 12, day: 21) }
+            }.disabled(manager.busy)
+            Text("Presets use fixed local clock times for testing, not calculated sunrise/sunset.")
+                .font(.caption2).foregroundStyle(.secondary)
+            DatePicker("Custom local time", selection: $manager.customDate,
+                       displayedComponents: [.date, .hourAndMinute])
+                .disabled(manager.busy)
+            HStack {
+                Button("Apply custom time") { manager.applyCustomDate() }
+                Button("Return to Live Solar") { manager.returnToLive() }
+            }.disabled(manager.busy)
+            Divider()
             HStack {
                 Button("Build") { manager.build() }
                 Button("Restart") { manager.restart() }
