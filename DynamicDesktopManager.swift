@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import Foundation
 import Darwin
+import ServiceManagement
 
 @MainActor
 final class Manager: ObservableObject {
@@ -14,7 +15,26 @@ final class Manager: ObservableObject {
     @Published var customDate = Date()
     @Published var crossfadeSeconds: Double = 1.5
     @Published var clockNow = Date()
+    @Published var tab = 0
     private var clockTimer: Timer?
+    @Published var launchAtLogin = false
+    @Published var autoStartOverlay = false
+    @Published var autoRecover = false
+    @Published var diagnostics = ""
+    @Published var recentEvents: [String] = []
+    private var deliberateStop = false
+    private var previouslyRunning = false
+    private var recoveryAttempts = 0
+    private var lastRecovery = Date.distantPast
+    private var wakeObserver: NSObjectProtocol?
+    private let preferences = UserDefaults.standard
+
+    private func record(_ message: String) {
+        let time = Date().formatted(date: .omitted, time: .standard)
+        recentEvents.insert("[\(time)] \(message)", at: 0)
+        if recentEvents.count > 30 { recentEvents.removeLast() }
+    }
+
 
     var effectiveSolarTime: Date { testMode ? customDate : clockNow }
     var currentModeLabel: String { testMode ? "Simulated solar time" : "Live solar time" }
@@ -28,16 +48,33 @@ final class Manager: ObservableObject {
     func startClock() {
         guard clockTimer == nil else { return }
         clockNow = Date()
+        checkHealth()
         clockTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
-    Task { @MainActor [weak self] in
-        guard let self else { return }
-        self.clockNow = Date()
-        self.reload()
-    }
-}
+            Task { @MainActor [weak self] in
+                self?.clockNow = Date()
+                self?.reload()
+                self?.checkHealth()
+            }
+        }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.record("Mac woke from sleep; checking overlay")
+                self?.reload()
+                self?.checkHealth()
+                // The overlay's timer will select the current solar frame.
+            }
+        }
     }
 
-    func stopClock() { clockTimer?.invalidate(); clockTimer = nil }
+    func stopClock() {
+        clockTimer?.invalidate(); clockTimer = nil
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+            self.wakeObserver = nil
+        }
+    }
 
     func updateCrossfade(_ seconds: Double) {
         do {
@@ -62,7 +99,92 @@ final class Manager: ObservableObject {
     private var config: URL { repo.appendingPathComponent("wallpaper-config.json") }
     private var images: URL { repo.appendingPathComponent("Apple Dynamic Wallpapers", isDirectory: true) }
 
-    init() { reload() }
+    init() {
+        autoStartOverlay = preferences.bool(forKey: "autoStartOverlay")
+        autoRecover = preferences.bool(forKey: "autoRecover")
+        launchAtLogin = SMAppService.mainApp.status == .enabled
+        reload()
+        previouslyRunning = !runningPIDs().isEmpty
+        if autoStartOverlay && !previouslyRunning { launchOverlay(reason: "Automatic startup") }
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled { try SMAppService.mainApp.register() }
+            else { try SMAppService.mainApp.unregister() }
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+            record("Launch at login: \(launchAtLogin ? "enabled" : "disabled")")
+            if enabled && !launchAtLogin {
+                detail = "macOS has not enabled login startup. Check System Settings → General → Login Items."
+            }
+        } catch {
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+            detail = "Launch at login failed: \(error.localizedDescription). An unsigned development app may need signing."
+            record("Login item registration failed")
+        }
+    }
+
+    func setAutoStart(_ enabled: Bool) {
+        autoStartOverlay = enabled
+        preferences.set(enabled, forKey: "autoStartOverlay")
+        record("Auto-start overlay \(enabled ? "enabled" : "disabled")")
+    }
+
+    func setAutoRecover(_ enabled: Bool) {
+        autoRecover = enabled
+        preferences.set(enabled, forKey: "autoRecover")
+        record("Crash recovery \(enabled ? "enabled" : "disabled")")
+    }
+
+    private func launchOverlay(reason: String) {
+        guard runningPIDs().isEmpty else { return }
+        guard FileManager.default.isExecutableFile(atPath: executable.path) else {
+            detail = "Overlay executable missing. Build it first."
+            record("Launch skipped: executable missing")
+            return
+        }
+        do {
+            let task = Process()
+            task.executableURL = executable
+            task.currentDirectoryURL = repo
+            try task.run()
+            deliberateStop = false
+            record(reason)
+        } catch {
+            detail = "Overlay launch failed: \(error.localizedDescription)"
+            record("Launch failed")
+        }
+    }
+
+    private func checkHealth() {
+        let running = !runningPIDs().isEmpty
+        if running {
+            if !previouslyRunning { record("Overlay running") }
+            recoveryAttempts = 0
+        } else if previouslyRunning && !deliberateStop {
+            record("Overlay exited unexpectedly")
+        }
+        if !running && autoRecover && !deliberateStop && previouslyRunning && !busy {
+            // At most three recovery attempts within a rolling 5-minute window.
+            if Date().timeIntervalSince(lastRecovery) > 300 { recoveryAttempts = 0 }
+            if recoveryAttempts < 3 {
+                recoveryAttempts += 1
+                lastRecovery = Date()
+                launchOverlay(reason: "Recovery attempt \(recoveryAttempts)/3")
+            } else {
+                detail = "Auto-recovery paused after repeated exits. Restart manually."
+            }
+        }
+        previouslyRunning = !runningPIDs().isEmpty || (autoRecover && !deliberateStop && recoveryAttempts > 0)
+        let exists = FileManager.default.fileExists(atPath: config.path)
+        let json = (try? Data(contentsOf: config)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let configState = !exists ? "Missing" : (json == nil ? "Invalid JSON" : "Valid JSON")
+        let set = (json?["wallpaperSet"] as? String) ?? "Unknown"
+        let mode = (json?["mode"] as? String) ?? "Unknown"
+        let frameCount = ((try? FileManager.default.contentsOfDirectory(atPath: images.appendingPathComponent(set).path)) ?? []).filter { $0.hasSuffix(".jpg") }.count
+        diagnostics = "Overlay: \(running ? "Running" : "Stopped") | Config: \(configState)\nMode: \(mode) | Set: \(set) | Images: \(frameCount)\nSimulation: \(json?["testDateTime"] == nil ? "Off" : "On") | Recovery: \(autoRecover ? "On" : "Off")"
+    }
+
 
     func reload() {
         sets = ((try? FileManager.default.contentsOfDirectory(at: images, includingPropertiesForKeys: [.isDirectoryKey])) ?? [])
@@ -168,17 +290,20 @@ final class Manager: ObservableObject {
     func stop() {
         guard !busy else { return }
         busy = true
+        deliberateStop = true
         Task {
             await stopProcesses()
             busy = false
             reload()
             detail = runningPIDs().isEmpty ? "Overlay stopped." : "Overlay did not stop within 3 seconds."
+            record(detail)
         }
     }
 
     func restart() {
         guard !busy else { return }
         busy = true
+        deliberateStop = true
         Task {
             await stopProcesses()
             guard runningPIDs().isEmpty else {
@@ -193,6 +318,9 @@ final class Manager: ObservableObject {
                 task.executableURL = executable
                 task.currentDirectoryURL = repo
                 try task.run()
+                deliberateStop = false
+                previouslyRunning = true
+                record("Overlay restarted")
                 detail = "Overlay launched."
             } catch { detail = "Restart failed: \(error.localizedDescription)" }
             busy = false
@@ -254,6 +382,12 @@ struct ManagerView: View {
                 Spacer()
                 Text(manager.status).foregroundStyle(.secondary)
             }
+            Picker("Section", selection: $manager.tab) {
+                Text("Wallpaper").tag(0)
+                Text("Testing").tag(1)
+                Text("System").tag(2)
+            }.pickerStyle(.segmented)
+            if manager.tab == 0 {
             Picker("Wallpaper set", selection: Binding(
                 get: { manager.selectedSet },
                 set: { manager.choose($0) }
@@ -307,6 +441,8 @@ struct ManagerView: View {
             }).disabled(manager.busy)
             Text("Changes apply on the next wallpaper transition.")
                 .font(.caption2).foregroundStyle(.secondary)
+            }
+            if manager.tab == 1 {
             Divider()
             HStack {
                 Text("Solar Testing").font(.headline)
@@ -332,6 +468,37 @@ struct ManagerView: View {
                 Button("Apply custom time") { manager.applyCustomDate() }
                 Button("Return to Live Solar") { manager.returnToLive() }
             }.disabled(manager.busy)
+            }
+            if manager.tab == 2 {
+                Divider()
+                Toggle("Launch manager at login", isOn: Binding(
+                    get: { manager.launchAtLogin }, set: { manager.setLaunchAtLogin($0) }
+                ))
+                Toggle("Start overlay with manager", isOn: Binding(
+                    get: { manager.autoStartOverlay }, set: { manager.setAutoStart($0) }
+                ))
+                Toggle("Recover unexpected overlay exits", isOn: Binding(
+                    get: { manager.autoRecover }, set: { manager.setAutoRecover($0) }
+                ))
+                Text("Recovery only runs while the manager is open. Stop prevents automatic relaunch; repeated failures pause recovery.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Divider()
+                Text("Diagnostics").font(.headline)
+                Text(manager.diagnostics).font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                Text("Recent manager events").font(.headline)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(manager.recentEvents, id: \.self) { entry in
+                            Text(entry).font(.system(.caption2, design: .monospaced))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }.frame(height: 95)
+                Text("Events are session-only; no location coordinates are logged.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
             Divider()
             HStack {
                 Button("Build") { manager.build() }
@@ -349,7 +516,7 @@ struct ManagerView: View {
             Button("Quit Manager") { NSApplication.shared.terminate(nil) }
         }
         .padding(14)
-        .frame(width: 470)
+        .frame(width: 490)
         .onAppear { manager.startClock() }
         .onDisappear { manager.stopClock() }
     }
