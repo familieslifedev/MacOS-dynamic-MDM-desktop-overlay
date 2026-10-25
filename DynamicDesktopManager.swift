@@ -12,6 +12,47 @@ final class Manager: ObservableObject {
     @Published var busy = false
     @Published var testMode = false
     @Published var customDate = Date()
+    @Published var crossfadeSeconds: Double = 1.5
+    @Published var clockNow = Date()
+    private var clockTimer: Timer?
+
+    var effectiveSolarTime: Date { testMode ? customDate : clockNow }
+    var currentModeLabel: String { testMode ? "Simulated solar time" : "Live solar time" }
+    var currentPreviewURL: URL? {
+        let folder = images.appendingPathComponent(selectedSet, isDirectory: true)
+        let contents = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        return contents.filter { ["jpg", "jpeg", "png", "heic"].contains($0.pathExtension.lowercased()) }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }.first
+    }
+
+    func startClock() {
+        guard clockTimer == nil else { return }
+        clockNow = Date()
+        clockTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+    Task { @MainActor [weak self] in
+        guard let self else { return }
+        self.clockNow = Date()
+        self.reload()
+    }
+}
+    }
+
+    func stopClock() { clockTimer?.invalidate(); clockTimer = nil }
+
+    func updateCrossfade(_ seconds: Double) {
+        do {
+            let data = try Data(contentsOf: config)
+            guard var json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw NSError(domain: "Manager", code: 4, userInfo: [NSLocalizedDescriptionKey: "Configuration must be a JSON object"])
+            }
+            let value = (seconds * 10).rounded() / 10
+            json["crossfadeSeconds"] = value
+            let updated = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
+            try updated.write(to: config, options: .atomic)
+            crossfadeSeconds = value
+            detail = "Crossfade set to \(String(format: "%.1f", value)) seconds. Applies to the next image change."
+        } catch { detail = "Crossfade setting failed: \(error.localizedDescription)" }
+    }
 
     // Bundle lives at <repository>/DynamicDesktopManager.app/Contents/MacOS/...
     private var repo: URL {
@@ -39,6 +80,11 @@ final class Manager: ObservableObject {
             } else {
                 testMode = false
             }
+        }
+        if let data = try? Data(contentsOf: config),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let seconds = json["crossfadeSeconds"] as? Double, seconds.isFinite {
+            crossfadeSeconds = min(10, max(0, seconds))
         }
         status = runningPIDs().isEmpty ? "Stopped" : "Running"
     }
@@ -215,6 +261,52 @@ struct ManagerView: View {
                 ForEach(manager.sets, id: \.self) { Text($0).tag($0) }
             }
             .disabled(manager.sets.isEmpty || manager.busy)
+            if let url = manager.currentPreviewURL, let preview = NSImage(contentsOf: url) {
+                HStack(spacing: 12) {
+                    Image(nsImage: preview)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 150, height: 86)
+                        .clipped()
+                        .cornerRadius(8)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(manager.selectedSet).font(.subheadline).bold()
+                        Text("Collection preview").font(.caption).foregroundStyle(.secondary)
+                        Text("Representative image, not the current solar frame")
+                            .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            Divider()
+            HStack {
+                Text("Solar information").font(.headline)
+                Spacer()
+                Text(manager.currentModeLabel).font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                Text("Solar clock")
+                Spacer()
+                Text(manager.effectiveSolarTime.formatted(date: .abbreviated, time: .shortened))
+                    .monospacedDigit().foregroundStyle(.secondary)
+            }
+            Text("The overlay calculates solar position and frame selection independently. This panel shows its configured clock, not the computed frame.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Divider()
+            HStack {
+                Text("Crossfade duration").font(.headline)
+                Spacer()
+                Text(String(format: "%.1f s", manager.crossfadeSeconds)).monospacedDigit()
+            }
+            Slider(value: Binding(
+                get: { manager.crossfadeSeconds },
+                set: { manager.crossfadeSeconds = $0 }
+            ), in: 0...10, step: 0.5, onEditingChanged: { editing in
+                if !editing { manager.updateCrossfade(manager.crossfadeSeconds) }
+            }).disabled(manager.busy)
+            Text("Changes apply on the next wallpaper transition.")
+                .font(.caption2).foregroundStyle(.secondary)
             Divider()
             HStack {
                 Text("Solar Testing").font(.headline)
@@ -230,8 +322,9 @@ struct ManagerView: View {
                 Button("Sunset") { manager.simulate(hour: 20) }
                 Button("Night") { manager.simulate(hour: 23, month: 12, day: 21) }
             }.disabled(manager.busy)
-            Text("Presets use fixed local clock times for testing, not calculated sunrise/sunset.")
+            Text("Presets use fixed local times, not calculated sunrise or sunset.")
                 .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             DatePicker("Custom local time", selection: $manager.customDate,
                        displayedComponents: [.date, .hourAndMinute])
                 .disabled(manager.busy)
@@ -256,7 +349,9 @@ struct ManagerView: View {
             Button("Quit Manager") { NSApplication.shared.terminate(nil) }
         }
         .padding(14)
-        .frame(width: 350)
+        .frame(width: 470)
+        .onAppear { manager.startClock() }
+        .onDisappear { manager.stopClock() }
     }
 }
 
