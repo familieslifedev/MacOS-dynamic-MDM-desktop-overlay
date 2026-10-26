@@ -31,6 +31,7 @@ final class Manager: ObservableObject {
     @Published var autoStartOverlay = false
     @Published var autoRecover = false
     @Published var diagnostics = ""
+    @Published var validationIssues: [String] = []
     @Published var recentEvents: [String] = []
     private var deliberateStop = false
     private var previouslyRunning = false
@@ -313,14 +314,90 @@ final class Manager: ObservableObject {
             }
         }
         previouslyRunning = !runningPIDs().isEmpty || (autoRecover && !deliberateStop && recoveryAttempts > 0)
-        let exists = FileManager.default.fileExists(atPath: config.path)
-        let json = (try? Data(contentsOf: config)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-        let configState = !exists ? "Missing" : (json == nil ? "Invalid JSON" : "Valid JSON")
-        let set = (json?["wallpaperSet"] as? String) ?? "Unknown"
-        let mode = (json?["mode"] as? String) ?? "Unknown"
-        let frameCount = ((try? FileManager.default.contentsOfDirectory(atPath: images.appendingPathComponent(set).path)) ?? []).filter { $0.hasSuffix(".jpg") }.count
-        diagnostics = "Overlay: \(running ? "Running" : "Stopped") | Config: \(configState)\nMode: \(mode) | Set: \(set) | Images: \(frameCount)\nSimulation: \(json?["testDateTime"] == nil ? "Off" : "On") | Recovery: \(autoRecover ? "On" : "Off")"
+        validateInstallation()
     }
+
+    // Shared contract with DesktopOverlay.swift: mode, coordinates, set, fade and test clock.
+    // Diagnostics deliberately omit coordinates and filesystem paths.
+    func validateInstallation() {
+        var issues: [String] = []
+        let fm = FileManager.default
+        if !fm.isExecutableFile(atPath: executable.path) {
+            issues.append("Overlay executable is missing or not executable. Use Build.")
+        }
+        guard let data = try? Data(contentsOf: config) else {
+            issues.append("Configuration missing. Run Setup Assistant.")
+            validationIssues = issues
+            diagnostics = "Configuration: Missing\nOverlay: \(runningPIDs().isEmpty ? "Stopped" : "Running")\nIssues: \(issues.count)"
+            return
+        }
+        guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            issues.append("Configuration is not a JSON object. Run Setup Assistant.")
+            validationIssues = issues
+            diagnostics = "Configuration: Invalid JSON\nIssues: \(issues.count)"
+            return
+        }
+        let mode = json["mode"] as? String ?? "static"
+        let set = json["wallpaperSet"] as? String ?? "The Desert"
+        if mode != "solar" && mode != "static" { issues.append("Mode must be solar or static.") }
+        if let fade = (json["crossfadeSeconds"] as? NSNumber)?.doubleValue,
+           (!fade.isFinite || !(0...10).contains(fade)) { issues.append("Crossfade must be between 0 and 10 seconds.") }
+        if let override = json["testDateTime"] as? String,
+           ISO8601DateFormatter().date(from: override) == nil {
+            issues.append("Simulated solar time is invalid. Return to Live Solar.")
+        }
+        var count = 0
+        if mode == "solar" {
+            let lat = (json["latitude"] as? NSNumber)?.doubleValue
+            let lon = (json["longitude"] as? NSNumber)?.doubleValue
+            if lat == nil || lon == nil || !lat!.isFinite || !lon!.isFinite || !(-90...90).contains(lat!) || !(-180...180).contains(lon!) {
+                issues.append("Solar coordinates are missing or invalid. Run Setup Assistant.")
+            }
+            if set.isEmpty || set == "." || set == ".." || set.contains("/") || set.contains("\\") {
+                issues.append("Wallpaper collection name is unsafe or empty.")
+            } else {
+                let folder = images.appendingPathComponent(set, isDirectory: true)
+                let expected = set.caseInsensitiveCompare("Solar Gradients") == .orderedSame ? 16 : 8
+                let contents = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+                for index in 1...expected {
+                    let stem = String(format: "%@ - %02d", set, index)
+                    if contents.contains(where: { $0.deletingPathExtension().lastPathComponent == stem &&
+                        ["jpg", "jpeg", "png", "heic", "tiff", "bmp", "gif", "webp"].contains($0.pathExtension.lowercased()) }) {
+                        count += 1
+                    }
+                }
+                if count != expected { issues.append("Wallpaper frames: \(count) of \(expected) found.") }
+            }
+        } else if mode == "static" {
+            if !["jpg", "jpeg", "png", "heic", "tiff", "bmp", "gif", "webp"].contains(where: {
+                fm.fileExists(atPath: repo.appendingPathComponent("wallpaper.\($0)").path)
+            }) { issues.append("Static wallpaper image is missing.") }
+        }
+        validationIssues = issues
+        diagnostics = "Overlay: \(runningPIDs().isEmpty ? "Stopped" : "Running") | Config: Parsed\nMode: \(mode) | Set: \(set) | Frames: \(count)\nSimulation: \(json["testDateTime"] == nil ? "Off" : "On") | Recovery: \(autoRecover ? "On" : "Off")\nIssues: \(issues.count)"
+    }
+
+    func exportDiagnostics() {
+        validateInstallation()
+        let panel = NSSavePanel()
+        panel.title = "Export redacted diagnostics"
+        panel.nameFieldStringValue = "DynamicDesktop-diagnostics.txt"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        // Do not export raw configuration, coordinates, absolute paths or event details.
+        let report = "Dynamic Desktop Manager v0.6\nGenerated: \(Date().formatted())\n\n\(diagnostics)\n\nValidation findings:\n" +
+            (validationIssues.isEmpty ? "None" : validationIssues.joined(separator: "\n")) + "\n"
+        do {
+            try report.write(to: url, atomically: true, encoding: .utf8)
+            detail = "Redacted diagnostics exported."
+            record("Diagnostics exported")
+        } catch { detail = "Export failed: \(error.localizedDescription)" }
+    }
+
+    func repairSimulatedTime() {
+        returnToLive()
+        validateInstallation()
+    }
+
 
 
     func reload() {
@@ -627,7 +704,24 @@ struct ManagerView: View {
                 Text("Diagnostics").font(.headline)
                 Text(manager.diagnostics).font(.system(.caption, design: .monospaced))
                     .textSelection(.enabled)
-                Button("Run Setup Assistant Again") { manager.beginSetup() }
+                if manager.validationIssues.isEmpty {
+                    Label("Validation passed", systemImage: "checkmark.circle")
+                        .foregroundStyle(.green)
+                } else {
+                    Text("Validation findings").font(.headline)
+                    ForEach(manager.validationIssues, id: \.self) { issue in
+                        Text("• " + issue).font(.caption).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                HStack {
+                    Button("Validate") { manager.validateInstallation() }
+                    Button("Export diagnostics…") { manager.exportDiagnostics() }
+                }
+                HStack {
+                    Button("Run Setup Assistant Again") { manager.beginSetup() }
+                    Button("Clear simulated time") { manager.repairSimulatedTime() }
+                        .disabled(!manager.testMode)
+                }
                 Text("Recent manager events").font(.headline)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 3) {

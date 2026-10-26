@@ -231,9 +231,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         directoryWatcher = watchDirectory(baseDirectory.path)
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged),
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self,
+            selector: #selector(wokeFromSleep), name: NSWorkspace.didWakeNotification, object: nil)
         refresh()
         // Poll once per minute: also detects clock/time-zone changes and missed FS events.
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             self?.refresh()
         }
     }
@@ -421,6 +423,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 old?.removeFromSuperview()
             }
         }
+    }
+
+    @objc private func wokeFromSleep() {
+        logger.info("Mac woke; refreshing solar wallpaper")
+        refresh()
     }
 
     @objc private func screensChanged() {
