@@ -16,6 +16,16 @@ final class Manager: ObservableObject {
     @Published var crossfadeSeconds: Double = 1.5
     @Published var clockNow = Date()
     @Published var tab = 0
+    @Published var showingSetup = false
+    @Published var setupStep = 0
+    @Published var setupSet = ""
+    @Published var setupSolar = true
+    @Published var setupLatitude = ""
+    @Published var setupLongitude = ""
+    @Published var setupFade = 1.5
+    @Published var setupStart = true
+    @Published var setupError = ""
+    @Published var setupInfo = ""
     private var clockTimer: Timer?
     @Published var launchAtLogin = false
     @Published var autoStartOverlay = false
@@ -105,7 +115,134 @@ final class Manager: ObservableObject {
         launchAtLogin = SMAppService.mainApp.status == .enabled
         reload()
         previouslyRunning = !runningPIDs().isEmpty
-        if autoStartOverlay && !previouslyRunning { launchOverlay(reason: "Automatic startup") }
+        let configurationExists = FileManager.default.fileExists(atPath: config.path)
+        let validConfiguration = (try? Data(contentsOf: config)).flatMap {
+            try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+        } != nil
+        if !configurationExists || !validConfiguration {
+            beginSetup()
+        } else if autoStartOverlay && !previouslyRunning {
+            launchOverlay(reason: "Automatic startup")
+        }
+    }
+
+    // First-run wizard. Existing settings are read, but never changed until Finish.
+    func beginSetup() {
+        reload()
+        let existing = (try? Data(contentsOf: config)).flatMap {
+            try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+        } ?? [:]
+        setupSet = (existing["wallpaperSet"] as? String).flatMap { sets.contains($0) ? $0 : nil } ?? (sets.first ?? "")
+        setupSolar = (existing["mode"] as? String ?? "solar") == "solar"
+        setupLatitude = (existing["latitude"] as? NSNumber).map { $0.stringValue } ?? ""
+        setupLongitude = (existing["longitude"] as? NSNumber).map { $0.stringValue } ?? ""
+        setupFade = min(10, max(0, (existing["crossfadeSeconds"] as? NSNumber)?.doubleValue ?? 1.5))
+        setupStart = true
+        setupError = ""
+        setupInfo = ""
+        setupStep = 0
+        showingSetup = true
+    }
+
+    func cancelSetup() {
+        showingSetup = false
+        setupError = ""
+    }
+
+    // Import only a complete, correctly named frame collection. Never overwrite.
+    func importWallpaperCollection() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose a wallpaper collection folder"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let source = panel.url else { return }
+        let name = source.lastPathComponent
+        let expected = (name == "Solar Gradients") ? 16 : 8
+        let fm = FileManager.default
+        let destination = images.appendingPathComponent(name, isDirectory: true)
+        do {
+            guard !name.isEmpty, name != ".", name != "..", !name.contains("/") else {
+                throw setupFailure("Invalid folder name.")
+            }
+            guard !fm.fileExists(atPath: destination.path) else {
+                throw setupFailure("A collection with that name already exists. Rename the source folder first.")
+            }
+            let contents = try fm.contentsOfDirectory(at: source, includingPropertiesForKeys: nil)
+            for index in 1...expected {
+                let stem = String(format: "%@ - %02d", name, index)
+                guard contents.contains(where: { $0.deletingPathExtension().lastPathComponent == stem &&
+                    ["jpg", "jpeg", "png", "heic"].contains($0.pathExtension.lowercased()) }) else {
+                    throw setupFailure("Missing frame \(stem). Expected \(expected) numbered frames.")
+                }
+            }
+            try fm.createDirectory(at: images, withIntermediateDirectories: true)
+            try fm.copyItem(at: source, to: destination)
+            reload()
+            setupSet = name
+            setupInfo = "Imported \(name) successfully."
+            setupError = ""
+            record("Wallpaper collection imported")
+        } catch {
+            setupError = "Import failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func setupFailure(_ message: String) -> NSError {
+        NSError(domain: "DynamicDesktopSetup", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
+    var setupValidation: String? {
+        guard sets.contains(setupSet) else { return "Choose or import a wallpaper collection." }
+        if !setupSolar {
+            let staticImage = ["jpg", "jpeg", "png", "heic", "tiff", "bmp", "gif", "webp"].contains {
+                FileManager.default.fileExists(atPath: repo.appendingPathComponent("wallpaper.\($0)").path)
+            }
+            guard staticImage else { return "Static mode requires a wallpaper.jpg (or other supported wallpaper file) in the repository." }
+        }
+        if setupSolar {
+            guard let lat = Double(setupLatitude.trimmingCharacters(in: .whitespacesAndNewlines)),
+                  let lon = Double(setupLongitude.trimmingCharacters(in: .whitespacesAndNewlines)),
+                  lat.isFinite, lon.isFinite, (-90...90).contains(lat), (-180...180).contains(lon) else {
+                return "Enter valid latitude (-90 to 90) and longitude (-180 to 180)."
+            }
+        }
+        guard setupFade.isFinite, (0...10).contains(setupFade) else { return "Invalid crossfade duration." }
+        return nil
+    }
+
+    func finishSetup() {
+        guard let error = setupValidation else {
+            do {
+                // Preserve unrelated keys in an existing config, including private values.
+                let existing = (try? Data(contentsOf: config)).flatMap {
+                    try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+                } ?? [:]
+                var updated = existing
+                updated["mode"] = setupSolar ? "solar" : "static"
+                updated["wallpaperSet"] = setupSet
+                updated["crossfadeSeconds"] = setupFade
+                if setupSolar {
+                    updated["latitude"] = Double(setupLatitude.trimmingCharacters(in: .whitespacesAndNewlines))!
+                    updated["longitude"] = Double(setupLongitude.trimmingCharacters(in: .whitespacesAndNewlines))!
+                }
+                // The setup wizard always returns to the live clock.
+                updated.removeValue(forKey: "testDateTime")
+                let data = try JSONSerialization.data(withJSONObject: updated, options: [.prettyPrinted, .sortedKeys])
+                try data.write(to: config, options: .atomic)
+                showingSetup = false
+                reload()
+                checkHealth()
+                detail = "Setup saved. \(setupSolar ? "Solar" : "Static") mode configured."
+                record("Setup completed")
+                if setupStart { restart() }
+            } catch {
+                setupError = "Could not save configuration: \(error.localizedDescription)"
+            }
+            return
+        }
+        setupError = error
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
@@ -377,6 +514,9 @@ struct ManagerView: View {
     @StateObject private var manager = Manager()
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if manager.showingSetup {
+                setupWizard
+            } else {
             HStack {
                 Text("Dynamic Desktop Manager").font(.headline)
                 Spacer()
@@ -487,6 +627,7 @@ struct ManagerView: View {
                 Text("Diagnostics").font(.headline)
                 Text(manager.diagnostics).font(.system(.caption, design: .monospaced))
                     .textSelection(.enabled)
+                Button("Run Setup Assistant Again") { manager.beginSetup() }
                 Text("Recent manager events").font(.headline)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 3) {
@@ -514,11 +655,96 @@ struct ManagerView: View {
             }
             Divider()
             Button("Quit Manager") { NSApplication.shared.terminate(nil) }
+            }
         }
         .padding(14)
         .frame(width: 490)
         .onAppear { manager.startClock() }
         .onDisappear { manager.stopClock() }
+    }
+
+    private var setupWizard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Dynamic Desktop Setup").font(.headline)
+                Spacer()
+                Text("\(manager.setupStep + 1) of 4").foregroundStyle(.secondary)
+            }
+            ProgressView(value: Double(manager.setupStep + 1), total: 4)
+            Divider()
+            if manager.setupStep == 0 {
+                Text("Welcome to Dynamic Desktop").font(.title3).bold()
+                Text("Configure your wallpaper locally. Nothing is uploaded, and existing configuration values are preserved until you finish.")
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("The manager currently runs alongside your source repository. This wizard does not install or bundle Apple wallpaper images.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if manager.setupStep == 1 {
+                Text("Choose a wallpaper collection").font(.title3).bold()
+                Picker("Collection", selection: $manager.setupSet) {
+                    ForEach(manager.sets, id: \.self) { Text($0).tag($0) }
+                }
+                Button("Import collection folder…") { manager.importWallpaperCollection() }
+                Text("Import a folder containing 'Folder Name - 01.jpg' through 08.jpg (16 for Solar Gradients). The source is copied, never overwritten.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let url = manager.currentPreviewURL, manager.setupSet == manager.selectedSet,
+                   let preview = NSImage(contentsOf: url) {
+                    Image(nsImage: preview).resizable().scaledToFit().frame(height: 115)
+                }
+                Text("Found \(manager.sets.count) collection(s)").font(.caption)
+            } else if manager.setupStep == 2 {
+                Text("Solar and transition settings").font(.title3).bold()
+                Toggle("Use solar-based wallpaper changes", isOn: $manager.setupSolar)
+                if manager.setupSolar {
+                    TextField("Latitude (decimal degrees)", text: $manager.setupLatitude)
+                    TextField("Longitude (decimal degrees)", text: $manager.setupLongitude)
+                    Text("Coordinates are stored only in your local wallpaper-config.json. No Location Services or network access required.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("Static mode uses a separate wallpaper.jpg (or other supported image) in the repository, not the selected collection.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                HStack {
+                    Text("Crossfade")
+                    Slider(value: $manager.setupFade, in: 0...10, step: 0.5)
+                    Text(String(format: "%.1f s", manager.setupFade)).monospacedDigit()
+                }
+            } else {
+                Text("Ready to finish").font(.title3).bold()
+                Text("Collection: \(manager.setupSet)")
+                Text("Mode: \(manager.setupSolar ? "Solar" : "Static")")
+                Text(String(format: "Crossfade: %.1f seconds", manager.setupFade))
+                Toggle("Start or restart overlay after setup", isOn: $manager.setupStart)
+                Text("Finish writes wallpaper-config.json atomically. Your previous file is untouched until then.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if !manager.setupInfo.isEmpty { Text(manager.setupInfo).font(.caption).foregroundStyle(.secondary) }
+            if !manager.setupError.isEmpty {
+                Text(manager.setupError).font(.caption).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Divider()
+            HStack {
+                Button("Cancel") { manager.cancelSetup() }
+                Spacer()
+                Button("Back") { manager.setupStep -= 1; manager.setupError = "" }
+                    .disabled(manager.setupStep == 0)
+                if manager.setupStep < 3 {
+                    Button("Continue") {
+                        manager.setupError = ""
+                        if manager.setupStep == 1 && !manager.sets.contains(manager.setupSet) {
+                            manager.setupError = "Choose or import a collection before continuing."
+                        } else {
+                            manager.setupStep += 1
+                        }
+                    }
+                } else {
+                    Button("Finish") { manager.finishSetup() }
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+        }
     }
 }
 
