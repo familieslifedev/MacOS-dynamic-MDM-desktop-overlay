@@ -16,6 +16,7 @@ final class Manager: ObservableObject {
     @Published var crossfadeSeconds: Double = 1.5
     @Published var clockNow = Date()
     @Published var tab = 0
+    @Published var previewFrame = 1
     @Published var showingSetup = false
     @Published var setupStep = 0
     @Published var setupSet = ""
@@ -54,6 +55,23 @@ final class Manager: ObservableObject {
         let contents = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
         return contents.filter { ["jpg", "jpeg", "png", "heic"].contains($0.pathExtension.lowercased()) }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }.first
+    }
+
+    // Preview is intentionally manual: it never changes the live overlay or configuration.
+    var previewFrameCount: Int { selectedSet == "Solar Gradients" ? 16 : 8 }
+    var selectedFrameURL: URL? {
+        guard !selectedSet.isEmpty else { return nil }
+        let folder = images.appendingPathComponent(selectedSet, isDirectory: true)
+        let stem = String(format: "%@ - %02d", selectedSet, previewFrame)
+        for ext in ["jpg", "jpeg", "png", "heic"] {
+            let url = folder.appendingPathComponent("\(stem).\(ext)")
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        return nil
+    }
+    func movePreview(_ delta: Int) {
+        let count = previewFrameCount
+        previewFrame = ((previewFrame - 1 + delta % count + count) % count) + 1
     }
 
     func startClock() {
@@ -436,6 +454,7 @@ final class Manager: ObservableObject {
             let updated = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
             try updated.write(to: config, options: .atomic)
             selectedSet = name
+            previewFrame = 1
             detail = "Selected \(name). The overlay will refresh automatically."
         } catch { detail = "Configuration error: \(error.localizedDescription)" }
     }
@@ -590,6 +609,7 @@ final class Manager: ObservableObject {
 struct ManagerView: View {
     @StateObject private var manager = Manager()
     var body: some View {
+        ScrollView(.vertical) {
         VStack(alignment: .leading, spacing: 12) {
             if manager.showingSetup {
                 setupWizard
@@ -597,38 +617,90 @@ struct ManagerView: View {
             HStack {
                 Text("Dynamic Desktop Manager").font(.headline)
                 Spacer()
-                Text(manager.status).foregroundStyle(.secondary)
+                Label(manager.status, systemImage: manager.status == "Running" ? "checkmark.circle.fill" : "pause.circle")
+                    .font(.caption).foregroundStyle(manager.status == "Running" ? .green : .secondary)
             }
-            Picker("Section", selection: $manager.tab) {
-                Text("Wallpaper").tag(0)
-                Text("Testing").tag(1)
-                Text("System").tag(2)
-            }.pickerStyle(.segmented)
-            if manager.tab == 0 {
-            Picker("Wallpaper set", selection: Binding(
-                get: { manager.selectedSet },
-                set: { manager.choose($0) }
-            )) {
-                ForEach(manager.sets, id: \.self) { Text($0).tag($0) }
-            }
-            .disabled(manager.sets.isEmpty || manager.busy)
-            if let url = manager.currentPreviewURL, let preview = NSImage(contentsOf: url) {
-                HStack(spacing: 12) {
-                    Image(nsImage: preview)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: 150, height: 86)
-                        .clipped()
-                        .cornerRadius(8)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(manager.selectedSet).font(.subheadline).bold()
-                        Text("Collection preview").font(.caption).foregroundStyle(.secondary)
-                        Text("Representative image, not the current solar frame")
-                            .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            // Explicit button actions avoid Picker selection issues in MenuBarExtra windows.
+            HStack(spacing: 6) {
+                ForEach(0..<3, id: \.self) { index in
+                    Button {
+                        manager.tab = index
+                    } label: {
+                        Text(["Wallpaper", "Testing", "System"][index])
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 5)
+                            .background(manager.tab == index ? Color.accentColor.opacity(0.20) : Color.secondary.opacity(0.07))
+                            .cornerRadius(7)
                     }
-                    Spacer(minLength: 0)
+                    .buttonStyle(.plain)
                 }
             }
+            if manager.tab == 0 {
+            HStack {
+                Text("Wallpaper set")
+                Spacer()
+                Menu {
+                    ForEach(manager.sets, id: \.self) { name in
+                        Button {
+                            manager.choose(name)
+                            manager.previewFrame = 1
+                        } label: {
+                            if name == manager.selectedSet {
+                                Label(name, systemImage: "checkmark")
+                            } else {
+                                Text(name)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Text(manager.selectedSet.isEmpty ? "Choose collection" : manager.selectedSet)
+                        Image(systemName: "chevron.up.chevron.down")
+                    }
+                }
+                .disabled(manager.sets.isEmpty || manager.busy)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label("Wallpaper gallery", systemImage: "photo.on.rectangle.angled")
+                        .font(.subheadline).bold()
+                    Spacer()
+                    Text("Frame \(manager.previewFrame) of \(manager.previewFrameCount)")
+                        .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                }
+                if let url = manager.selectedFrameURL, let preview = NSImage(contentsOf: url) {
+                    Image(nsImage: preview)
+                        .resizable().scaledToFill()
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 195)
+                        .clipped().cornerRadius(10)
+                        // A scaledToFill image can retain an oversized hit-test region
+                        // outside its visible clipped frame. It must not intercept controls.
+                        .allowsHitTesting(false)
+                        .accessibilityLabel("Wallpaper preview frame \(manager.previewFrame)")
+                } else {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.10))
+                        VStack(spacing: 6) {
+                            Image(systemName: "photo.badge.exclamationmark").font(.title2)
+                            Text("Frame not available").font(.caption)
+                        }.foregroundStyle(.secondary)
+                    }.frame(height: 165)
+                }
+                HStack {
+                    Button { manager.movePreview(-1) } label: { Label("Previous", systemImage: "chevron.left") }
+                    Spacer()
+                    Text(manager.selectedSet).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer()
+                    Button { manager.movePreview(1) } label: { Label("Next", systemImage: "chevron.right") }
+                }.disabled(manager.sets.isEmpty)
+                Text("Gallery previews are manual and do not change the desktop wallpaper.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            .padding(10)
+            .background(Color.secondary.opacity(0.06))
+            .cornerRadius(12)
             Divider()
             HStack {
                 Text("Solar information").font(.headline)
@@ -742,7 +814,7 @@ struct ManagerView: View {
             }.disabled(manager.busy)
             Button("Build & Restart") { manager.build(andRestart: true) }
                 .disabled(manager.busy)
-            Button("Refresh status") { manager.reload() }
+            Button("Refresh status") { manager.reload(); manager.validateInstallation() }
             if !manager.detail.isEmpty {
                 ScrollView { Text(manager.detail).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                     .frame(maxHeight: 110)
@@ -752,7 +824,9 @@ struct ManagerView: View {
             }
         }
         .padding(14)
-        .frame(width: 490)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(width: 490, height: 590)
         .onAppear { manager.startClock() }
         .onDisappear { manager.stopClock() }
     }

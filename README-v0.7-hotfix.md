@@ -1,0 +1,1 @@
+v0.7.1 UI hotfix: confines menu bar content to a 590-point scrollable window so Section and Wallpaper selectors remain reachable. Source-only; compile on macOS using bash build-manager.sh. Quit previous manager before reopening. No configuration or wallpaper files included.
