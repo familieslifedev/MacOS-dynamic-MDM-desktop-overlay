@@ -1,18 +1,18 @@
-# Local configuration and personal wallpapers
-overlay.json
-wallpaper.*
-dynamic/
-DesktopOverlayLauncher
-DesktopOverlay
-.DS_Store
-*.dSYM/
+# Local configuration and user-provided images
 wallpaper-config.json
+Apple Dynamic Wallpapers/
+wallpaper.jpg
+wallpaper.jpeg
+wallpaper.png
+wallpaper.heic
+wallpaper.tiff
+wallpaper.bmp
+wallpaper.gif
+wallpaper.webp
 
-# Apple dynamic wallpaper assets
-/Apple Dynamic Wallpapers/
-
-# Local compiled executable
-/DesktopOverlayDynamic
-
-# Dynamic Desktop Manager build output
-/DynamicDesktopManager.app/
+# Built applications and overlay binaries
+DynamicDesktopManager.app/
+DesktopOverlayDynamic
+DesktopOverlayDynamic.next
+*.dSYM/
+.DS_Store

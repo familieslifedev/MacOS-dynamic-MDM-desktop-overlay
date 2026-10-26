@@ -1,38 +1,48 @@
-# MacOS Dynamic MDM Desktop Overlay
+# Dynamic Desktop Manager
 
-A macOS desktop-level wallpaper overlay with **static** and **solar dynamic** modes. This fork extends [iamrobertorodriguez/MacOS-MDM-desktop-overlay](https://github.com/iamrobertorodriguez/MacOS-MDM-desktop-overlay) with solar-position-based image selection and configurable crossfades.
+A native macOS menu bar interface and desktop-level wallpaper overlay supporting static wallpapers and locally calculated, solar-position-based dynamic wallpapers.
 
-The overlay draws over the desktop wallpaper; it **does not change macOS wallpaper preferences, remove device management, or modify MDM settings**.
+This project extends [MacOS-MDM-desktop-overlay](https://github.com/iamrobertorodriguez/MacOS-MDM-desktop-overlay). The overlay draws a click-through window at desktop level. **It does not modify the system wallpaper preference, remove MDM, or change device management settings.** Follow your organisation's device policies.
 
 ## Features
 
-- Static wallpaper fallback (`wallpaper.jpg`, `.png`, `.heic`, and other supported formats).
-- Solar wallpaper selection from locally extracted Apple dynamic wallpaper frames, using configured latitude and longitude.
-- Approximate metadata-derived mappings for **The Desert**, **The Cliffs**, **The Lake**, **The Beach** (eight frames each), and **Solar Gradients** (16 frames).
-- Configurable crossfade (default 1.5 seconds), click-through overlays on connected displays, and refresh/file monitoring.
-- Local calculations; no location-service permission or network lookup is required.
+- Native SwiftUI menu bar controls for the desktop overlay
+- Static image support and solar-driven wallpaper frame selection
+- Local wallpaper collection selection and manual frame gallery
+- Solar time simulation for previewing time-dependent behaviour
+- Configurable image crossfades
+- Multi-display desktop overlays
+- First-run configuration assistant
+- Startup preferences, process controls, diagnostics, validation and recovery options
+- Local-only solar calculations; no network or Location Services permission needed
 
-## Requirements and build
+## Requirements
 
-Build on macOS with the Swift compiler and AppKit/QuartzCore frameworks:
+- macOS Sonoma 14 or later (upstream baseline); newer SwiftUI and ServiceManagement functionality may have additional requirements
+- Xcode Command Line Tools with `swiftc` and `xcrun`
+- Wallpaper image files supplied by the user (not bundled)
+
+## Build and launch
+
+Clone the repository and run from its root:
+
+```sh
+bash build-manager.sh
+open DynamicDesktopManager.app
+```
+
+The manager currently expects its `.app` bundle to remain **inside the repository root**, alongside the source, configuration and overlay executable. This is a source-build distribution, **not yet a relocatable or signed/notarised application**.
+
+The manager offers controls to build or restart the overlay. Alternatively, compile the overlay directly:
 
 ```sh
 swiftc -O -framework AppKit -framework QuartzCore DesktopOverlay.swift -o DesktopOverlayDynamic
-```
-
-The built executable uses the **directory containing the executable** as its base directory. Keep it in the repository root alongside `wallpaper-config.json` and the wallpaper folders, or adjust your deployment accordingly.
-
-The original overlay and this fork use the same per-user single-instance lock. **Quit the original process before launching this build**:
-
-```sh
 ./DesktopOverlayDynamic
 ```
 
-The application may relaunch itself in the background. If it seems to exit immediately, check for another running overlay before assuming it failed.
+## Configuration
 
-## Local configuration
-
-Create a file named **`wallpaper-config.json`** beside `DesktopOverlayDynamic`:
+The first-run assistant can create the local configuration. For manual setup, place `wallpaper-config.json` in the repository root:
 
 ```json
 {
@@ -44,57 +54,29 @@ Create a file named **`wallpaper-config.json`** beside `DesktopOverlayDynamic`:
 }
 ```
 
-Replace the example coordinates **locally** with your approximate latitude and longitude. They must be JSON numbers, not quoted strings. `wallpaperSet` is the name of a single folder under `Apple Dynamic Wallpapers/`. Change it to `The Cliffs`, `The Lake`, `The Beach`, or `Solar Gradients` to select another set.
+Replace the sample coordinates locally. Latitude and longitude are decimal degrees. For static mode use `"mode": "static"` and place a `wallpaper.jpg` (or supported alternative) in the repository root. Solar mode expects numbered image frames in `Apple Dynamic Wallpapers/<collection>/` with filenames such as `The Desert - 01.jpg`. Landscape sets expect eight frames; Solar Gradients expects sixteen.
 
-**Never commit your actual `wallpaper-config.json`.** The `.gitignore` should exclude it, along with `Apple Dynamic Wallpapers/` and the compiled `DesktopOverlayDynamic` binary. Verify the ignore rules before pushing changes.
+The dynamic frame choice approximates solar-position metadata; it does not replicate Apple's proprietary wallpaper interpolation.
 
-For static mode, set `"mode": "static"` and put `wallpaper.jpg` (or another supported `wallpaper.*` extension) beside the executable. If the config is absent, the application defaults to static mode.
+## Privacy and assets
 
-## Wallpaper folder layout
+The program calculates solar position locally. Coordinates are stored in a local JSON file. Do not commit local coordinates or wallpaper assets. Proprietary Apple wallpaper images are **not** included and must not be redistributed without appropriate rights.
 
-```text
-MacOS-dynamic-MDM-desktop-overlay/
-├── DesktopOverlay.swift
-├── DesktopOverlayDynamic               # local build; ignored by Git
-├── wallpaper-config.json               # private; ignored by Git
-├── README.md
-├── Solar-Metadata-Update-README.md
-└── Apple Dynamic Wallpapers/           # local assets; ignored by Git
-    ├── The Desert/
-    │   ├── The Desert - 01.jpg
-    │   ├── The Desert - 02.jpg
-    │   └── ... The Desert - 08.jpg
-    ├── The Cliffs/
-    │   └── The Cliffs - 01.jpg ... 08.jpg
-    ├── The Lake/
-    │   └── The Lake - 01.jpg ... 08.jpg
-    ├── The Beach/
-    │   └── The Beach - 01.jpg ... 08.jpg
-    └── Solar Gradients/
-        └── Solar Gradients - 01.jpg ... 16.jpg
-```
+## Limitations
 
-The app constructs filenames from the selected **folder name**, followed by ` - ` and a **two-digit frame number**, then checks supported image extensions. Keep the extracted frame numbers aligned with their original HEIC image indices; **do not rename frames into chronological order**. Apple wallpaper assets are not distributed with this repository.
+- All displays currently use the same wallpaper collection and selected image.
+- This project uses desktop-level overlay windows rather than modifying system wallpaper settings.
+- Signing, notarisation, relocatable installation and broad macOS compatibility verification are future release tasks.
+- Login item registration may require an appropriately signed application.
 
-## How solar selection works
+## Documentation
 
-The application calculates the sun's approximate altitude and azimuth from the current time and the coordinates in the private configuration. It chooses the nearest mapped altitude anchor, distinguishing morning from evening using solar azimuth. The landscape sets and Solar Gradients use different mappings; see [Solar-Metadata-Update-README.md](Solar-Metadata-Update-README.md).
+- [Release history](CHANGELOGS/README.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Third-party notices and licensing](NOTICE.md)
+- [Original-contributions licence](LICENSE)
 
-The result is **an approximation of Apple's dynamic wallpaper selection**, not a reproduction of Apple's proprietary interpolation or transition timings. Frame changes are checked about once per minute. Smooth fades and longer-running transitions still warrant real-world testing.
+## Credits and licensing
 
-## Diagnostics and limitations
-
-To view application logs:
-
-```sh
-log stream --style compact --predicate 'subsystem == "io.github.iamrobertorodriguez.DesktopOverlay"'
-```
-
-- All connected displays use the same selected image; per-monitor selection is not implemented.
-- The app preserves the last successfully loaded wallpaper if a required frame is temporarily unavailable.
-- The solar model is approximate and assumes the configured coordinates match the Mac's intended location.
-- No Apple wallpaper images, personal coordinates, or built executables should be included in public commits.
-
-## Attribution
-
-Based on the original [MacOS-MDM-desktop-overlay](https://github.com/iamrobertorodriguez/MacOS-MDM-desktop-overlay). Preserve upstream attribution and check the upstream licence and the rights associated with any wallpaper assets before redistribution.
+Based on the upstream [MacOS-MDM-desktop-overlay](https://github.com/iamrobertorodriguez/MacOS-MDM-desktop-overlay). See [NOTICE.md](NOTICE.md) for an important licensing caveat: **the upstream repository does not currently display an explicit licence**. The included MIT licence covers only original contributions by this project's contributors, not upstream code or third-party wallpaper assets. Confirm upstream redistribution permission before publishing a packaged release.
