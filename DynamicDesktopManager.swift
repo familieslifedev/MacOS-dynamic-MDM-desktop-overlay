@@ -402,7 +402,7 @@ final class Manager: ObservableObject {
         panel.nameFieldStringValue = "DynamicDesktop-diagnostics.txt"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         // Do not export raw configuration, coordinates, absolute paths or event details.
-        let report = "Dynamic Desktop Manager v0.6\nGenerated: \(Date().formatted())\n\n\(diagnostics)\n\nValidation findings:\n" +
+        let report = "Dynamic Desktop Manager v0.9\nGenerated: \(Date().formatted())\n\n\(diagnostics)\n\nValidation findings:\n" +
             (validationIssues.isEmpty ? "None" : validationIssues.joined(separator: "\n")) + "\n"
         do {
             try report.write(to: url, atomically: true, encoding: .utf8)
@@ -743,6 +743,7 @@ struct ManagerView: View {
                 }
             }
             HStack {
+                Button("Sunrise") { manager.simulate(hour: 6) }
                 Button("Midday") { manager.simulate(hour: 12) }
                 Button("Sunset") { manager.simulate(hour: 20) }
                 Button("Night") { manager.simulate(hour: 23, month: 12, day: 21) }

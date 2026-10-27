@@ -1,33 +1,53 @@
-# Copilot instructions
+# Copilot instructions — Dynamic Desktop Manager
 
-## Build and run
+## Project architecture
 
-This is a single-file macOS AppKit utility. It is compiled directly with `swiftc`; there is no Xcode project or Swift package. Run commands from the repository root.
+This repository contains **two active Swift source files**, compiled directly with `swiftc` (no Xcode project or Swift package):
 
-```bash
-# Type-check without creating an artifact
-swiftc -typecheck DesktopOverlay.swift -framework AppKit
+- `DynamicDesktopManager.swift`: SwiftUI menu bar manager, setup assistant, wallpaper gallery, simulated solar time controls, diagnostics, and overlay process controls.
+- `DesktopOverlay.swift`: AppKit desktop-level overlay, static/solar image selection, crossfades, display management, file watching, and wake refresh.
 
-# Build the ignored executable beside the source
-swiftc DesktopOverlay.swift -o DesktopOverlayLauncher -framework AppKit
+`DesktopOverlay-Solar-Metadata.swift` is an obsolete historical snapshot, not a build input; it is slated for removal in v0.9. Do not revive its older asset-path logic.
+
+## Build and test
+
+Run from the repository root on macOS:
+
+```sh
+bash build-manager.sh
+open DynamicDesktopManager.app
+python3 run_solar_unit_tests.py
 ```
 
-Runtime image lookup is relative to the executable, not the current working directory. Put exactly one `wallpaper.<extension>` beside `DesktopOverlayLauncher` before launching it. For development, run `./DesktopOverlayLauncher --background` to keep the process attached and retain console output. A normal `./DesktopOverlayLauncher` invocation relaunches itself with `--background`, redirects the child's standard streams to `/dev/null`, and exits the parent process immediately.
+The manager's **Build** or **Build & Restart** controls compile `DesktopOverlay.swift` with AppKit and QuartzCore into `DesktopOverlayDynamic.next`, then replace `DesktopOverlayDynamic` on success. For a manual overlay build:
 
-## Architecture
+```sh
+swiftc -O -framework AppKit -framework QuartzCore DesktopOverlay.swift -o DesktopOverlayDynamic
+```
 
-- Top-level startup code implements the self-relaunch behavior before creating the shared `NSApplication`. The long-running child uses the `.accessory` activation policy, so it has no Dock or app-switcher presence.
-- `AppDelegate` owns all overlay windows and the directory watcher. At launch it resolves the executable's real path, searches that directory for a supported wallpaper, builds the overlays, and subscribes to display changes.
-- `resolveImagePath()` checks formats in priority order: `jpg`, `jpeg`, `png`, `heic`, `tiff`, `bmp`, `gif`, then `webp`. The first existing `wallpaper.*` file wins.
-- `showOverlay(imagePath:)` replaces the entire window set with one borderless `NSWindow` per `NSScreen`. Each window sits one level above the desktop, joins all Spaces, stays stationary, ignores window cycling and mouse events, and displays a centered, proportionally scaled image over black.
-- A `DispatchSourceFileSystemObject` watches the executable directory for writes and renames. Its main-queue handler reloads the first matching wallpaper. `NSApplication.didChangeScreenParametersNotification` uses the same full-window rebuild when displays are connected, disconnected, or reconfigured.
+The manager app and overlay executable currently live alongside repository assets and configuration. Do not assume the app bundle is relocatable. Keep built executables and local data ignored by Git.
 
-## Repository-specific conventions
+## Assets and configuration
 
-- Preserve executable-relative asset discovery; launching from Finder, Terminal, and Login Items must behave identically. Do not replace it with current-working-directory lookup.
-- Keep the supported extension list and its precedence synchronized between `DesktopOverlay.swift` and `README.md`. Multiple matching images are ambiguous by design, so documentation should continue to direct users to keep only one.
-- Keep AppKit window creation, teardown, and refreshes on the main thread. The existing watcher deliberately targets `.main`.
-- Preserve the one-window-per-screen model and rebuild all windows after wallpaper or screen changes unless a requested behavior change explicitly requires another lifecycle.
-- `DesktopOverlayLauncher`, `wallpaper*`, and `overlay.log` are local artifacts ignored by Git; do not add generated binaries, user wallpapers, or runtime logs to the repository.
-- Maintain compatibility with macOS Sonoma 14 or later. Avoid newer-only AppKit APIs unless the documented minimum version is intentionally raised.
-- Update `README.md` when changing the build command, executable name, wallpaper naming/formats, background-launch behavior, display behavior, or Login Item workflow.
+- `wallpaper-config.json` lives next to the overlay executable and is local-only.
+- Static mode uses a supported `wallpaper.*` image beside the executable.
+- Solar collections use `Apple Dynamic Wallpapers/<set>/<set> - NN.jpg` (or a supported alternative image extension).
+- Landscape collections use eight frames; Solar Gradients uses sixteen.
+- Preserve original HEIC export frame numbers. They are **not** necessarily chronological.
+- Optional `testDateTime` is a UTC ISO 8601 override; remove it to restore live solar time.
+- Never commit private coordinates, proprietary wallpaper assets, credentials, or confidential MDM details.
+
+## Engineering conventions
+
+- Preserve executable-relative paths and the manager's repository-root assumptions unless deliberately redesigning installation.
+- Preserve one click-through desktop-level overlay window per display, main-thread AppKit updates, and display/sleep/wake refresh behaviour.
+- Preserve the solar anchor mappings, `Solar.position()`, and `Solar.frame()`; do not silently change frame timing.
+- Keep crossfades, file watchers, and the single-instance lock working.
+- The gallery is preview-only and must not intercept adjacent controls or alter the desktop wallpaper.
+- Keep recovery semantics accurate: recovery works while the manager is running, and explicit Stop must prevent automatic relaunch.
+- Keep source changes focused and run solar tests and macOS manual regression checks after modifying the overlay.
+- Update `README.md`, `SOLAR-ENGINE.md`, `SOLAR-TESTING.md`, and the appropriate version changelog when behaviour changes.
+
+## Legal and distribution
+
+This is a fork of an upstream repository with unresolved redistribution permissions. The local MIT licence covers authorised original contributions only. Do not package or redistribute upstream-derived binaries or Apple wallpaper assets without appropriate rights; see `NOTICE.md`.

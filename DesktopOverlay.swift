@@ -80,59 +80,8 @@ private final class AspectFillImageView: NSView {
 // Approximate NOAA solar position. Uses the Mac's current clock and a configured
 // location; no Location Services permission or network request is required.
 private enum Solar {
-    static func elevation(at date: Date, latitude: Double, longitude: Double) -> Double {
-        let calendar = Calendar(identifier: .gregorian)
-        let utc = TimeZone(secondsFromGMT: 0)!
-        var cal = calendar
-        cal.timeZone = utc
-        let day = Double(cal.ordinality(of: .day, in: .year, for: date) ?? 1)
-        let parts = cal.dateComponents([.hour, .minute, .second], from: date)
-        let minutes = Double(parts.hour ?? 0) * 60 + Double(parts.minute ?? 0) + Double(parts.second ?? 0) / 60
-        let gamma = 2 * Double.pi / 365 * (day - 1 + (minutes / 60 - 12) / 24)
-        let eqTime = 229.18 * (0.000075 + 0.001868 * cos(gamma) - 0.032077 * sin(gamma)
-                               - 0.014615 * cos(2 * gamma) - 0.040849 * sin(2 * gamma))
-        let decl = 0.006918 - 0.399912 * cos(gamma) + 0.070257 * sin(gamma)
-                   - 0.006758 * cos(2 * gamma) + 0.000907 * sin(2 * gamma)
-                   - 0.002697 * cos(3 * gamma) + 0.00148 * sin(3 * gamma)
-        let trueSolarMinutes = (minutes + eqTime + 4 * longitude).truncatingRemainder(dividingBy: 1440)
-        let hourAngle = (trueSolarMinutes / 4 - 180) * Double.pi / 180
-        let lat = latitude * Double.pi / 180
-        let sine = sin(lat) * sin(decl) + cos(lat) * cos(decl) * cos(hourAngle)
-        return asin(max(-1, min(1, sine))) * 180 / Double.pi
-    }
-
     // Sample around the current day to locate sunrise and sunset, including DST
     // changes (the calculation itself is UTC). Polar day/night have no crossings.
-    static func sunEvents(around date: Date, latitude: Double, longitude: Double) -> (Date, Date)? {
-        // Assumes the configured location is in the Mac's local time zone.
-        // This is appropriate for a desktop at its usual location.
-        let start = Calendar.current.startOfDay(for: date)
-        var sunrise: Date?
-        var sunset: Date?
-        var previous = start
-        var previousValue = elevation(at: previous, latitude: latitude, longitude: longitude) + 0.833
-        for step in 1...72 { // 27 hours at 22.5-minute intervals
-            let next = start.addingTimeInterval(Double(step) * 1350)
-            let value = elevation(at: next, latitude: latitude, longitude: longitude) + 0.833
-            if (previousValue <= 0 && value > 0) || (previousValue >= 0 && value < 0) {
-                var low = previous
-                var high = next
-                for _ in 0..<14 {
-                    let mid = low.addingTimeInterval(high.timeIntervalSince(low) / 2)
-                    let midValue = elevation(at: mid, latitude: latitude, longitude: longitude) + 0.833
-                    if (midValue > 0) == (previousValue > 0) { low = mid } else { high = mid }
-                }
-                let crossing = low.addingTimeInterval(high.timeIntervalSince(low) / 2)
-                if previousValue < 0 { if sunrise == nil { sunrise = crossing } }
-                else if sunset == nil { sunset = crossing }
-            }
-            previous = next
-            previousValue = value
-        }
-        guard let rise = sunrise, let set = sunset, rise < set else { return nil }
-        return (rise, set)
-    }
-
     // Metadata-derived solar anchor points. Frame indices are 1-based, matching
     // ImageIO exports of the original Apple HEIC frames (01.jpg, 02.jpg, ...).
     // This is a nearest-anchor approximation, not Apple's proprietary interpolation.

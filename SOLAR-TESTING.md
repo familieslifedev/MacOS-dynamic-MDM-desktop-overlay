@@ -1,59 +1,79 @@
 # Solar wallpaper testing
 
-## Installation
+The current `DesktopOverlay.swift` already includes simulated time support. **Do not run the old `add_solar_test_mode.py` patch**; it is a historical migration script and can be removed during v0.9 cleanup.
 
-From the repository root, back up your working source, then run the patch:
+## Build from the repository root
 
-```bash
-cp DesktopOverlay.swift DesktopOverlay.before-test-mode.swift
-python3 ~/Downloads/add_solar_test_mode.py
+```sh
+bash build-manager.sh
+open DynamicDesktopManager.app
+```
+
+Use **Build & Restart** in the manager to compile and restart the overlay. Alternatively, compile it directly:
+
+```sh
 swiftc -O -framework AppKit -framework QuartzCore DesktopOverlay.swift -o DesktopOverlayDynamic
 ```
 
-Keep the backup local; do not commit it accidentally. `add_solar_test_mode.py` preserves the current `Apple Dynamic Wallpapers/<set>/<set> - NN.jpg` naming and other existing changes.
+Stop the running overlay before manually launching a newly compiled copy; both use the same single-instance lock.
 
-## Simulated clock
+## Test using the manager
 
-Add an optional UTC ISO 8601 timestamp to your **local** `wallpaper-config.json`:
+1. Open the menu bar manager and select **Testing**.
+2. Try **Sunrise**, **Midday**, **Sunset**, and **Night** presets, or choose a **Custom local time** and select **Apply custom time**.
+3. Confirm the desktop wallpaper changes to a plausible frame and that transitions are smooth.
+4. Select **Return to Live Solar** when finished.
+
+The preset labels are convenient test cases, **not calculated astronomical events**. In particular, **Sunset** uses a fixed local clock time. The manager's solar clock display reflects the configured clock; it does not report the frame calculated by the overlay.
+
+## Manual simulated clock
+
+You can also add an optional property to your local `wallpaper-config.json`:
 
 ```json
-"testDateTime": "2026-06-21T06:00:00Z"
+{
+  "mode": "solar",
+  "latitude": 0.0,
+  "longitude": 0.0,
+  "wallpaperSet": "The Desert",
+  "crossfadeSeconds": 1.5,
+  "testDateTime": "2026-06-21T06:00:00Z"
+}
 ```
 
-This is **one additional property**, not a standalone JSON file. Keep your existing mode, coordinates, wallpaperSet, and crossfadeSeconds fields. Use a valid UTC timestamp with `Z`; for a local clock time, convert to UTC first. The app's existing refresh timer polls approximately once per minute; restart the app if you want to see a change immediately. **Stop the existing overlay process normally before starting the newly compiled one** (they share a single-instance lock). The selected frame depends on date, season and location, not just the hour.
+Replace coordinates locally. `testDateTime` is a UTC ISO 8601 timestamp with `Z`; convert local time to UTC if entering it manually. The overlay normally refreshes approximately once per minute, so allow time for a transition or restart it. **Remove `testDateTime` to restore live time.** Never commit the private configuration file.
 
-Suggested test timestamps (all UTC):
-
-- `2026-06-21T00:00:00Z`
-- `2026-06-21T04:00:00Z`
-- `2026-06-21T08:00:00Z`
-- `2026-06-21T12:00:00Z`
-- `2026-06-21T16:00:00Z`
-- `2026-06-21T20:00:00Z`
-
-Record which JPEG appears, verify it fits the approximate solar lighting, and check for black flashes during transitions. To test a fade, change the timestamp to one selecting a different frame, save the config, and wait for the next refresh. The timer and directory watcher may introduce a short delay.
-
-**Remove `testDateTime` to restore live solar time.** Do not commit `wallpaper-config.json`; it contains private coordinates.
+Example UTC test timestamps: `2026-06-21T00:00:00Z`, `04:00:00Z`, `08:00:00Z`, `12:00:00Z`, `16:00:00Z`, and `20:00:00Z` (each with the same date and trailing `Z`). Results depend on the configured location and season.
 
 ## Automated solar checks
 
-```bash
-python3 ~/Downloads/run_solar_unit_tests.py
+From the repository root:
+
+```sh
+python3 run_solar_unit_tests.py
 ```
 
-This extracts the **actual** `Solar` implementation from your current Swift source and compiles a temporary Swift test harness. It checks frame bounds, deterministic output, and finite solar positions across 2,400 combinations (5 sets × 4 locations × 5 months × 24 hours). It does **not** prove Apple's exact frame mapping or the GUI crossfade.
+This extracts the `Solar` implementation from the active Swift source, compiles a temporary Swift harness, and checks **2,400 combinations** (5 collections × 4 locations × 5 months × 24 hours) for valid frame ranges, deterministic results, and finite solar coordinates. It does **not** prove the mapping matches Apple's implementation or test GUI transitions.
 
-## Manual regression checks
+## Manual regression checklist
 
-- Launch with `testDateTime` absent and verify live solar mode.
-- Change `wallpaperSet` and verify the corresponding named images load.
-- Change `testDateTime` across sunrise/sunset and watch for a smooth crossfade.
-- Check all attached displays; unplug/replug a display.
-- Confirm sleep/wake selects the current frame on the next refresh.
-- Confirm static `wallpaper.jpg` mode still works.
-- Temporarily move a JPEG and confirm the app retains the last good image; restore it afterward.
-- Use malformed testDateTime and confirm an error is logged without crashing.
+- [ ] Live solar mode selects a plausible frame with no `testDateTime` override.
+- [ ] All four landscape collections load their numbered frames.
+- [ ] Solar Gradients loads its sixteen-frame collection.
+- [ ] Simulated morning, midday, evening, and night select plausible frames.
+- [ ] Crossfades occur without black flashes or unexpected window stacking.
+- [ ] Static `wallpaper.jpg` mode still works.
+- [ ] Gallery **Previous** and **Next** buttons work without changing the desktop wallpaper.
+- [ ] Connecting/disconnecting displays refreshes overlays appropriately.
+- [ ] Sleep/wake restores an appropriate frame.
+- [ ] Missing image frames are handled without a crash; restore test files afterward.
+- [ ] Invalid `testDateTime` is reported without crashing.
+- [ ] **Return to Live Solar** removes the simulated clock override.
+- [ ] Build, Build & Restart, Stop, and Restart behave as expected.
+- [ ] Diagnostics and validation show useful results without leaking coordinates.
 
-## Safety and version control
+Record the macOS version, observed behaviour, and any issues. These are **tests to perform**, not claims that v0.9 has passed them.
 
-Keep `wallpaper-config.json`, `Apple Dynamic Wallpapers/`, and the executable ignored by Git. Do not run the original overlay simultaneously with the test build. These scripts are intended for development, not an unattended production install.
+## Safety
+
+Keep `wallpaper-config.json`, `Apple Dynamic Wallpapers/`, and generated executables out of Git. Use test data that does not disclose private coordinates or device-management information.
