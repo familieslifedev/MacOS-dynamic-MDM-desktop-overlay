@@ -1,6 +1,6 @@
 # Dynamic Desktop Manager
 
-**Documentation target: v0.9.0 (pre-release)**
+**v0.9.1 (pre-release)**
 
 A native macOS menu bar manager and desktop-level wallpaper overlay supporting static images and locally calculated, solar-position-based dynamic wallpapers.
 
