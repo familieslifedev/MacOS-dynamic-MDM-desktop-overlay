@@ -4,16 +4,12 @@ Versioned development notes for Dynamic Desktop Manager. A changelog entry docum
 
 ## Current development milestone
 
-- [v0.9 — Cleanup and documentation refresh (draft)](CHANGELOG-v0.9.md)
+- [v0.9 — Cleanup and documentation refresh](CHANGELOG-v0.9.x.md)
 
 ## Previous versions
 
-- [v0.8 — Documentation and release preparation (draft)](CHANGELOG-v0.8.md)
-- [v0.7.4](CHANGELOG-v0.7.4.md)
-- [v0.7.3](CHANGELOG-v0.7.3.md)
-- [v0.7.2](CHANGELOG-v0.7.2.md)
-- [v0.7.1](CHANGELOG-v0.7.1.md)
-- [v0.7](CHANGELOG-v0.7.md)
+- [v0.8 — Documentation and release preparation](CHANGELOG-v0.8.md)
+- [v0.7.x](CHANGELOG-v0.7.x.md)
 - [v0.6](CHANGELOG-v0.6.md)
 - [v0.5](CHANGELOG-v0.5.md)
 - [v0.4](CHANGELOG-v0.4.md)
