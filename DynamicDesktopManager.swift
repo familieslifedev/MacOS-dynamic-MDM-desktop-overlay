@@ -402,7 +402,7 @@ final class Manager: ObservableObject {
         panel.nameFieldStringValue = "DynamicDesktop-diagnostics.txt"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         // Do not export raw configuration, coordinates, absolute paths or event details.
-        let report = "Dynamic Desktop Manager v0.9.1\nGenerated: \(Date().formatted())\n\n\(diagnostics)\n\nValidation findings:\n" +
+        let report = "Dynamic Desktop Manager v0.9.2\nGenerated: \(Date().formatted())\n\n\(diagnostics)\n\nValidation findings:\n" +
             (validationIssues.isEmpty ? "None" : validationIssues.joined(separator: "\n")) + "\n"
         do {
             try report.write(to: url, atomically: true, encoding: .utf8)

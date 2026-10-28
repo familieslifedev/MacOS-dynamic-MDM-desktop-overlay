@@ -91,7 +91,6 @@ The upstream repository has no explicit licence identified in the existing notic
 - [Solar engine and frame mappings](SOLAR-ENGINE.md)
 - [Solar testing and regression checks](SOLAR-TESTING.md)
 - [Release history](CHANGELOGS/README.md)
-- [Release readiness checklist](RELEASE-CHECKLIST.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 - [Third-party notices](NOTICE.md)

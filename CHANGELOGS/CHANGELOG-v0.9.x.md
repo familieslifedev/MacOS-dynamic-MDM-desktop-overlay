@@ -15,6 +15,12 @@
 
 - Updated documentation grammar and naming
 
+
+### v0.9.2
+
+- Removed dead link from README
+- Slight tweak to morning solar calculation
+
 ## Known limitations
 
 - Solar frame selection approximates Apple's metadata-based timing and does not replicate Apple's interpolation.
