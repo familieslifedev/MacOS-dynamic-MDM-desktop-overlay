@@ -20,9 +20,9 @@ The Desert, The Cliffs, The Lake, and The Beach share these mappings:
 | Morning, deep night | −25° | `02` |
 | Morning, before sunrise | −9° | `03` |
 | Morning, horizon | 0° | `04` |
-| Morning | +10° | `01` |
+| Morning | +5° | `01` |
 | Daytime peak | +25° | `05` |
-| Afternoon | +10° | `06` |
+| Afternoon | +5° | `06` |
 | Evening, horizon | 0° | `07` |
 | Evening twilight | −9° | `08` |
 | Evening, deep night | −25° | `02` |

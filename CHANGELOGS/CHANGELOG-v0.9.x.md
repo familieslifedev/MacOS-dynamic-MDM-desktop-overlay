@@ -21,6 +21,12 @@
 - Removed dead link from README
 - Slight tweak to morning solar calculation
 
+
+### v0.9.3
+
+- Changed solar engine doc to reflect new calculations
+- Slight tweak to evening solar calculation
+
 ## Known limitations
 
 - Solar frame selection approximates Apple's metadata-based timing and does not replicate Apple's interpolation.

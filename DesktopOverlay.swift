@@ -97,7 +97,7 @@ private enum Solar {
     ]
     private static let landscapeEvening = [
         Anchor(altitude: -25, frame: 2), Anchor(altitude: -9, frame: 8),
-        Anchor(altitude: 0, frame: 7), Anchor(altitude: 10, frame: 6),
+        Anchor(altitude: 0, frame: 7), Anchor(altitude: 5, frame: 6),
         Anchor(altitude: 25, frame: 5)
     ]
     private static let gradientMorning = [
